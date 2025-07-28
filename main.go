@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"fyne.io/fyne/v2/storage"
 	"io"
 	"os"
 	"path/filepath"
@@ -148,7 +147,7 @@ func saveDir(dirToUse string) {
 		}
 	}
 	if dirToUse == "" {
-		showTemporaryMessage("Save " + newName + " successfully imported ✓")
+		showTemporaryMessage("Save " + newName + " successfully imported ✔️")
 	}
 	updateSaves()
 }
@@ -224,7 +223,7 @@ func replace() {
 			}
 			// Then copy origin files into the same directory (reuse the save folder name)
 			saveDir(saveName)
-			showTemporaryMessage(saveName + " successfully replaced ✓")
+			showTemporaryMessage(saveName + " successfully replaced ✔️")
 		}
 	}, w).Show()
 
@@ -250,7 +249,7 @@ func deleteSave() {
 			// Clear selection & update list
 			selectedIndex = -1
 			updateSaves()
-			showTemporaryMessage(saveName + " successfully deleted ✓")
+			showTemporaryMessage(saveName + " successfully deleted ✔️")
 		}
 	}, w).Show()
 }
@@ -320,6 +319,7 @@ func openOptionsWindow() {
 
 	originLabel := widget.NewLabel("Origin Folder: " + config.OriginPath)
 	destLabel := widget.NewLabel("Destination Folder: " + config.DestinationPath)
+	filesLabel := widget.NewLabel("Files to Copy:\n" + strings.Join(config.FilesToCopy, "\n"))
 
 	originBtn := widget.NewButton("Set Origin", func() {
 		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
@@ -342,44 +342,67 @@ func openOptionsWindow() {
 		}, opts)
 	})
 
-	filesLabel := widget.NewLabel("Files to Copy:\n" + strings.Join(config.FilesToCopy, "\n"))
-
-	filesBtn := widget.NewButton("Add File to Copy", func() {
+	filesBtn := widget.NewButton("Select Files to Copy", func() {
 		if config.OriginPath == "" {
 			dialog.ShowInformation("Error", "Set Origin folder first.", opts)
 			return
 		}
 
-		// Custom File Dialog with set location
-		openDialog := dialog.NewFileOpen(func(uri fyne.URIReadCloser, err error) {
-			if err != nil || uri == nil {
-				return
-			}
+		entries, err := os.ReadDir(config.OriginPath)
+		if err != nil {
+			dialog.ShowError(err, opts)
+			return
+		}
 
-			relPath, err := filepath.Rel(config.OriginPath, uri.URI().Path())
-			if err != nil || strings.HasPrefix(relPath, "..") {
-				dialog.ShowError(fmt.Errorf("File must be inside the origin folder"), opts)
-				return
-			}
+		var checkboxes []*widget.Check
+		selected := map[string]bool{}
 
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			cb := widget.NewCheck(name, func(checked bool) {
+				selected[name] = checked
+			})
+
+			// Pre-select already saved files
 			for _, f := range config.FilesToCopy {
-				if f == relPath {
-					return // already present
+				if f == name {
+					cb.SetChecked(true)
+					selected[name] = true
+					break
 				}
 			}
 
-			config.FilesToCopy = append(config.FilesToCopy, relPath)
+			checkboxes = append(checkboxes, cb)
+		}
+
+		dialogWin := fyne.CurrentApp().NewWindow("Select Files")
+		dialogWin.Resize(fyne.NewSize(400, 500))
+
+		saveBtn := widget.NewButton("Confirm Selection", func() {
+			var newList []string
+			for file, checked := range selected {
+				if checked {
+					newList = append(newList, file)
+				}
+			}
+			config.FilesToCopy = newList
 			saveConfig()
 			filesLabel.SetText("Files to Copy:\n" + strings.Join(config.FilesToCopy, "\n"))
-		}, opts)
+			dialogWin.Close()
+		})
 
-		// Set start location to origin directory
-		originURI := storage.NewFileURI(config.OriginPath)
-		lister, err := storage.ListerForURI(originURI)
-		if err == nil {
-			openDialog.SetLocation(lister)
+		checkboxContainer := container.NewVBox()
+		for _, cb := range checkboxes {
+			checkboxContainer.Add(cb)
 		}
-		openDialog.Show()
+
+		dialogWin.SetContent(container.NewBorder(nil, saveBtn, nil, nil,
+			container.NewVScroll(checkboxContainer),
+		))
+		dialogWin.Show()
 	})
 
 	clearFilesBtn := widget.NewButton("Clear File List", func() {
