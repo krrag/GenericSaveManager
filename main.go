@@ -42,6 +42,10 @@ func main() {
 	w = a.NewWindow("Generic Save Manager")
 	w.Resize(fyne.NewSize(550, 400))
 
+	iconData, _ := os.ReadFile("icon.png")
+	resource := fyne.NewStaticResource("icon.png", iconData)
+	w.SetIcon(resource)
+
 	loadConfig()
 
 	messageLabel = widget.NewLabel("") // Reserved space for feedback
