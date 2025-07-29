@@ -23,6 +23,11 @@ type Config struct {
 	FilesToCopy     []string `json:"files_to_copy"`
 }
 
+type AppConfig struct {
+	CurrentProfile string `json:"current_profile"`
+}
+
+var appConfig AppConfig
 var config Config
 var configFile = "save_manager_config.json"
 
@@ -63,7 +68,7 @@ func main() {
 
 	buttonRow := container.NewHBox(importBtn, loadBtn, replaceBtn, deleteBtn, renameBtn, optionsBtn)
 
-	// ✅ Responsive layout: scrollable list in center, buttons at bottom
+	// Responsive layout: scrollable list in center, buttons at bottom
 	scrollList := container.NewScroll(saveList)
 	mainLayout := container.NewBorder(nil, container.NewVBox(messageLabel, buttonRow), nil, nil, scrollList)
 
@@ -200,7 +205,6 @@ func load() {
 		}
 	}
 
-	// Show a temporary checkmark
 	showTemporaryMessage("Save loaded ✓")
 }
 
@@ -313,6 +317,45 @@ func rename() {
 		}, w)
 }
 
+var currentProfile = "default"
+
+func getProfileNames() []string {
+	files, err := os.ReadDir("profiles")
+	if err != nil {
+		return []string{}
+	}
+	var names []string
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".json") {
+			name := strings.TrimSuffix(file.Name(), ".json")
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func loadProfile(name string) {
+	currentProfile = name
+	appConfig.CurrentProfile = name
+	saveAppConfig()
+
+	profilePath := filepath.Join("profiles", name+".json")
+	if _, err := os.Stat(profilePath); os.IsNotExist(err) {
+		config = Config{} // New empty profile
+		saveConfig()
+	} else {
+		f, err := os.Open(profilePath)
+		if err != nil {
+			fmt.Println("Failed to load profile:", err)
+			return
+		}
+		defer f.Close()
+		json.NewDecoder(f).Decode(&config)
+	}
+
+	updateSaves()
+}
+
 func openOptionsWindow() {
 	opts := fyne.CurrentApp().NewWindow("Options")
 	opts.Resize(fyne.NewSize(800, 400))
@@ -320,12 +363,18 @@ func openOptionsWindow() {
 	originLabel := widget.NewLabel("Origin Folder: " + config.OriginPath)
 	destLabel := widget.NewLabel("Destination Folder: " + config.DestinationPath)
 	filesLabel := widget.NewLabel("Files to Copy:\n" + strings.Join(config.FilesToCopy, "\n"))
+	profilesLabel := widget.NewLabel("Profile Options :")
 
 	originBtn := widget.NewButton("Set Origin", func() {
 		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
 			if uri != nil {
+				previousOriginPath := config.OriginPath
 				config.OriginPath = uri.Path()
 				originLabel.SetText("Origin Folder: " + config.OriginPath)
+				if config.OriginPath != previousOriginPath {
+					config.FilesToCopy = nil
+					filesLabel.SetText("Files to Copy:\n")
+				}
 				saveConfig()
 			}
 		}, opts)
@@ -411,6 +460,130 @@ func openOptionsWindow() {
 		saveConfig()
 	})
 
+	profileNames := getProfileNames()
+	profileSelect := widget.NewSelect(profileNames, func(selected string) {
+		saveConfig()
+		loadProfile(selected)
+		updateSaves()
+
+		originLabel.SetText("Origin Folder: " + config.OriginPath)
+		destLabel.SetText("Destination Folder: " + config.DestinationPath)
+		filesLabel.SetText("Files to Copy:\n" + strings.Join(config.FilesToCopy, "\n"))
+	})
+
+	profileSelect.PlaceHolder = "Select Profile"
+	profileSelect.SetSelected(currentProfile)
+
+	newProfileBtn := widget.NewButton("New Profile", func() {
+		existing := getProfileNames()
+		base := "New Profile "
+		counter := 1
+		var name string
+
+		for {
+			name = base + fmt.Sprint(counter)
+			alreadyUsed := false
+			for _, p := range existing {
+				if p == name {
+					alreadyUsed = true
+					break
+				}
+			}
+			if !alreadyUsed {
+				break
+			}
+			counter++
+		}
+
+		currentProfile = name
+		config = Config{}
+		appConfig.CurrentProfile = name
+		saveAppConfig()
+		saveConfig()
+		profileSelect.Options = getProfileNames()
+		profileSelect.SetSelected(name)
+		filesLabel.SetText("Files to Copy:\n")
+		originLabel.SetText("Origin Folder: ")
+		destLabel.SetText("Destination Folder: ")
+	})
+
+	renameProfileBtn := widget.NewButton("Rename Profile", func() {
+		entry := widget.NewEntry()
+		entry.SetText(currentProfile)
+
+		dialog.ShowForm("Rename Profile", "Rename", "Cancel",
+			[]*widget.FormItem{widget.NewFormItem("New Name", entry)},
+			func(confirm bool) {
+				if !confirm {
+					return
+				}
+				newName := strings.TrimSpace(entry.Text)
+				if newName == "" || strings.ContainsAny(newName, `\/:*?"<>|`) {
+					dialog.ShowError(fmt.Errorf("Invalid name"), opts)
+					return
+				}
+				oldPath := filepath.Join("profiles", currentProfile+".json")
+				newPath := filepath.Join("profiles", newName+".json")
+				if _, err := os.Stat(newPath); err == nil {
+					dialog.ShowError(fmt.Errorf("Profile already exists"), opts)
+					return
+				}
+
+				if err := os.Rename(oldPath, newPath); err != nil {
+					dialog.ShowError(fmt.Errorf("Rename failed: %w", err), opts)
+					return
+				}
+
+				currentProfile = newName
+				appConfig.CurrentProfile = newName
+				saveAppConfig()
+				saveConfig()
+				profileSelect.Options = getProfileNames()
+				profileSelect.SetSelected(newName)
+			}, opts)
+	})
+
+	deleteProfileBtn := widget.NewButton("Delete Profile", func() {
+		if len(getProfileNames()) <= 1 {
+			dialog.ShowInformation("Error", "You must have at least one profile.", opts)
+			return
+		}
+
+		dialog.NewConfirm("Delete Profile", "Are you sure you want to delete the profile '"+currentProfile+"'?", func(confirm bool) {
+			if !confirm {
+				return
+			}
+
+			profilePath := filepath.Join("profiles", currentProfile+".json")
+			if err := os.Remove(profilePath); err != nil {
+				dialog.ShowError(fmt.Errorf("Failed to delete profile: %w", err), opts)
+				return
+			}
+
+			// Reload profiles and reset to first profile
+			files, err := os.ReadDir("profiles")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("Failed to read profiles: %w", err), opts)
+				return
+			}
+			profileFile := files[0]
+			currentProfile = strings.TrimSuffix(profileFile.Name(), ".json")
+			appConfig.CurrentProfile = currentProfile
+			saveAppConfig()
+			loadProfile(currentProfile)
+
+			profileSelect.Options = getProfileNames()
+			profileSelect.SetSelected(currentProfile)
+
+			originLabel.SetText("Origin Folder: " + config.OriginPath)
+			destLabel.SetText("Destination Folder: " + config.DestinationPath)
+			filesLabel.SetText("Files to Copy:\n" + strings.Join(config.FilesToCopy, "\n"))
+
+		}, opts).Show()
+	})
+
+	profileBtns := container.NewHBox(profileSelect, newProfileBtn, renameProfileBtn, deleteProfileBtn)
+
 	opts.SetContent(container.NewVBox(
 		originLabel,
 		originBtn,
@@ -420,6 +593,9 @@ func openOptionsWindow() {
 		filesLabel,
 		filesBtn,
 		clearFilesBtn,
+		widget.NewSeparator(),
+		profilesLabel,
+		profileBtns,
 	))
 
 	opts.Show()
@@ -470,31 +646,58 @@ func updateSaves() {
 		newSelection = len(saves) - 1
 	}
 
-	// Update selection in UI and internal state
-	if newSelection >= 0 {
-		saveList.Select(newSelection)
-		selectedIndex = newSelection
+	if saveList != nil {
+		if newSelection >= 0 {
+			saveList.Select(newSelection)
+			selectedIndex = newSelection
+		} else {
+			saveList.UnselectAll()
+			selectedIndex = -1
+		}
 	} else {
-		// No saves available, clear selection
-		saveList.UnselectAll()
-		selectedIndex = -1
+		// No UI selection possible yet
+		selectedIndex = newSelection
 	}
-}
-func loadConfig() {
-	file, err := os.Open(configFile)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-	json.NewDecoder(file).Decode(&config)
+
 }
 
 func saveConfig() {
-	file, err := os.Create(configFile)
+	profilePath := filepath.Join("profiles", currentProfile+".json")
+	f, err := os.Create(profilePath)
 	if err != nil {
-		fmt.Println("Error saving config:", err)
+		fmt.Println("Failed to save profile:", err)
 		return
 	}
-	defer file.Close()
-	json.NewEncoder(file).Encode(config)
+	defer f.Close()
+	json.NewEncoder(f).Encode(config)
+}
+
+func loadConfig() {
+	// Create profiles dir if needed
+	os.MkdirAll("profiles", os.ModePerm)
+
+	// Load or initialize save_manager_config.json
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		appConfig = AppConfig{CurrentProfile: "default"}
+		saveAppConfig()
+	} else {
+		f, err := os.Open(configFile)
+		if err == nil {
+			json.NewDecoder(f).Decode(&appConfig)
+			f.Close()
+		}
+	}
+
+	currentProfile = appConfig.CurrentProfile
+	loadProfile(currentProfile)
+}
+
+func saveAppConfig() {
+	f, err := os.Create(configFile)
+	if err != nil {
+		fmt.Println("Failed to write config file:", err)
+		return
+	}
+	defer f.Close()
+	json.NewEncoder(f).Encode(appConfig)
 }
