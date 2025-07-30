@@ -7,4 +7,4 @@ I suggest giving the exe its own directory, as it will create a config file on s
 
 # Current Release
 
-https://github.com/krrag/GenericSaveManager/releases/tag/v0.1.0
+https://github.com/krrag/GenericSaveManager/releases/tag/v1.0.0
