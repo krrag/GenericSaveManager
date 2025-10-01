@@ -21,6 +21,7 @@ type Config struct {
 	OriginPath      string   `json:"origin_path"`
 	DestinationPath string   `json:"destination_path"`
 	FilesToCopy     []string `json:"files_to_copy"`
+	ShortcutKey     string   `json:"shortcut_key"`
 }
 
 type AppConfig struct {
@@ -47,6 +48,7 @@ func main() {
 	w.SetIcon(resource)
 
 	loadConfig()
+	registerShortcut()
 
 	messageLabel = widget.NewLabel("") // Reserved space for feedback
 
@@ -82,6 +84,16 @@ func main() {
 }
 
 // ----------------- FUNCTIONS -----------------
+
+func registerShortcut() {
+	if w != nil && config.ShortcutKey != "" {
+		w.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
+			if strings.EqualFold(string(ev.Name), config.ShortcutKey) {
+				load()
+			}
+		})
+	}
+}
 
 func showTemporaryMessage(text string) {
 	messageLabel.SetText(text)
@@ -367,7 +379,28 @@ func openOptionsWindow() {
 	originLabel := widget.NewLabel("Origin Folder: " + config.OriginPath)
 	destLabel := widget.NewLabel("Destination Folder: " + config.DestinationPath)
 	filesLabel := widget.NewLabel("Files to Copy:\n" + strings.Join(config.FilesToCopy, "\n"))
-	profilesLabel := widget.NewLabel("Profile Options :")
+	profilesLabel := widget.NewLabel("Profile Options:")
+
+	// === Shortcut Key UI ===
+	shortcutLabel := widget.NewLabel("Shortcut Key: " + config.ShortcutKey)
+	setShortcutBtn := widget.NewButton("Set Load Shortcut Key", func() {
+		info := widget.NewLabel("Press any key to set as shortcut...")
+		overlay := fyne.CurrentApp().NewWindow("Listening")
+		overlay.Resize(fyne.NewSize(300, 100))
+		overlay.SetContent(container.NewCenter(info))
+
+		// Capture next key press
+		overlay.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
+			config.ShortcutKey = string(ev.Name) // store the key name
+			shortcutLabel.SetText("Shortcut Key: " + config.ShortcutKey)
+			saveConfig()
+
+			registerShortcut()
+			overlay.Close()
+		})
+
+		overlay.Show()
+	})
 
 	originBtn := widget.NewButton("Set Origin", func() {
 		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
@@ -600,6 +633,9 @@ func openOptionsWindow() {
 		widget.NewSeparator(),
 		profilesLabel,
 		profileBtns,
+		widget.NewSeparator(),
+		shortcutLabel,
+		setShortcutBtn,
 	))
 
 	opts.Show()
